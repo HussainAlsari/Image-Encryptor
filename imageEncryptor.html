@@ -1,0 +1,206 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minimalist Image Encryptor</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#f5f5f5;color:#111}
+    .container{background:#fff;padding:24px 32px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);width:100%;max-width:500px}
+    h1{font-size:1.6rem;margin-bottom:16px;text-align:center;color:#222}
+    label{display:block;margin-top:12px;font-weight:600;font-size:0.95rem}
+    input[type=text],input[type=password],textarea,input[type=file]{width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;margin-top:6px}
+    button{padding:10px 16px;margin-top:12px;border:none;border-radius:8px;background:#007BFF;color:#fff;font-weight:600;cursor:pointer;transition:0.2s}
+    button:hover{background:#0056b3}
+    .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+    .preview{max-width:100%;margin-top:12px;border-radius:12px;object-fit:cover}
+    .copy{margin-left:8px;background:#6c757d}
+    .copy:hover{background:#495057}
+    .muted{font-size:0.85rem;color:#666;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Minimalist Image Encryptor</h1>
+    <p class="muted">Encrypt any image with a password and share it securely. Everything runs in your browser.</p><label>Select Image to Encrypt:</label>
+<input id="imageInput" type="file" accept="image/*" />
+<img id="preview" class="preview" alt="preview" />
+
+<label>Password (leave empty to generate automatically):</label>
+<input id="passwordInput" type="text" placeholder="Auto-generated if empty" />
+
+<div class="row">
+  <button id="encryptBtn">Encrypt & Download</button>
+  <button id="generateBtn" type="button">Generate Strong Password</button>
+</div>
+<input id="outPassword" type="text" readonly />
+<button id="copyBtn" class="copy">Copy Password</button>
+
+<hr style="margin:24px 0;border:none;border-top:1px solid #eee" />
+
+<label>Select Encrypted File (.enc):</label>
+<input id="encInput" type="file" accept="*/*" />
+
+<label>Enter Password to Decrypt:</label>
+<input id="decPassword" type="text" />
+<div class="row">
+  <button id="decryptBtn">Decrypt & Download</button>
+</div>
+<div id="decryptResult" class="muted"></div>
+
+<p class="muted" style="margin-top:16px;">Security Note: Encryption happens locally. Share the password separately and safely.</p>
+
+  </div>  <script>
+    // Utilities
+    function b64Encode(bytes){
+      let binary='';
+      const len = bytes.byteLength;
+      const view = new Uint8Array(bytes);
+      for(let i=0;i<len;i++) binary += String.fromCharCode(view[i]);
+      return btoa(binary);
+    }
+    function b64Decode(b64){
+      const binary = atob(b64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for(let i=0;i<len;i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    async function deriveKey(password, salt, iterations=100000){
+      const enc = new TextEncoder();
+      const passKey = await crypto.subtle.importKey('raw', enc.encode(password), {name:'PBKDF2'}, false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        {name:'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256'},
+        passKey,
+        {name:'AES-GCM', length:256},
+        false,
+        ['encrypt','decrypt']
+      );
+    }
+
+    async function encryptArrayBuffer(ab, password){
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await deriveKey(password, salt);
+      const cipher = await crypto.subtle.encrypt({name:'AES-GCM', iv: iv}, key, ab);
+      return {cipher: cipher, salt: salt, iv: iv};
+    }
+
+    async function decryptToArrayBuffer(cipherBuffer, password, salt, iv){
+      const key = await deriveKey(password, salt);
+      return crypto.subtle.decrypt({name:'AES-GCM', iv: iv}, key, cipherBuffer);
+    }
+
+    // DOM
+    const imageInput = document.getElementById('imageInput');
+    const preview = document.getElementById('preview');
+    const passwordInput = document.getElementById('passwordInput');
+    const encryptBtn = document.getElementById('encryptBtn');
+    const generateBtn = document.getElementById('generateBtn');
+    const outPassword = document.getElementById('outPassword');
+    const copyBtn = document.getElementById('copyBtn');
+
+    const encInput = document.getElementById('encInput');
+    const decPassword = document.getElementById('decPassword');
+    const decryptBtn = document.getElementById('decryptBtn');
+    const decryptResult = document.getElementById('decryptResult');
+
+    let currentFile = null;
+    imageInput.addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0];
+      currentFile = f || null;
+      if(!f){ preview.src=''; preview.style.display='none'; return; }
+      const url = URL.createObjectURL(f);
+      preview.src = url; preview.style.display = 'block';
+    });
+
+    generateBtn.addEventListener('click', ()=>{
+      outPassword.value = generatePassword(20);
+      passwordInput.value = outPassword.value;
+    });
+
+    copyBtn.addEventListener('click', ()=>{ navigator.clipboard.writeText(outPassword.value || ''); });
+
+    encryptBtn.addEventListener('click', async ()=>{
+      if(!currentFile){ alert('Please select an image first.'); return; }
+      let password = passwordInput.value.trim();
+      if(!password){ password = generatePassword(20); }
+      outPassword.value = password;
+
+      const arr = await readFileAsArrayBuffer(currentFile);
+      try{
+        const {cipher, salt, iv} = await encryptArrayBuffer(arr, password);
+        const payload = {
+          filename: currentFile.name,
+          type: currentFile.type,
+          salt: btoa(String.fromCharCode(...new Uint8Array(salt.buffer))),
+          iv: btoa(String.fromCharCode(...new Uint8Array(iv.buffer))),
+          cipher: b64Encode(cipher)
+        };
+        const blob = new Blob([JSON.stringify(payload)], {type:'application/octet-stream'});
+        downloadBlob(blob, currentFile.name + '.enc');
+      }catch(err){
+        console.error(err);
+        alert('Encryption error: '+err.message);
+      }
+    });
+
+    decryptBtn.addEventListener('click', async ()=>{
+      const f = encInput.files && encInput.files[0];
+      if(!f){ alert('Select a .enc file'); return; }
+      const pwd = decPassword.value;
+      if(!pwd){ alert('Enter the password'); return; }
+      decryptResult.textContent = 'Decrypting...';
+      try{
+        const txt = await readFileAsText(f);
+        const obj = JSON.parse(txt);
+        const salt = Uint8Array.from(atob(obj.salt), c=>c.charCodeAt(0));
+        const iv = Uint8Array.from(atob(obj.iv), c=>c.charCodeAt(0));
+        const cipherBuf = b64Decode(obj.cipher);
+        const plain = await decryptToArrayBuffer(cipherBuf, pwd, salt, iv);
+        const outBlob = new Blob([plain], {type: obj.type || 'application/octet-stream'});
+        downloadBlob(outBlob, obj.filename || 'decrypted');
+        decryptResult.textContent = 'Decryption complete. File downloaded.';
+      }catch(err){
+        console.error(err);
+        decryptResult.textContent = 'Error: Incorrect password or corrupted file.';
+      }
+    });
+
+    function generatePassword(len){
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*()-_=+';
+      let out='';
+      const arr = new Uint32Array(len);
+      crypto.getRandomValues(arr);
+      for(let i=0;i<len;i++) out += chars[arr[i]%chars.length];
+      return out;
+    }
+    function readFileAsArrayBuffer(file){
+      return new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onload = ()=>res(r.result);
+        r.onerror = ()=>rej(r.error);
+        r.readAsArrayBuffer(file);
+      });
+    }
+    function readFileAsText(file){
+      return new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onload = ()=>res(r.result);
+        r.onerror = ()=>rej(r.error);
+        r.readAsText(file);
+      });
+    }
+    function downloadBlob(blob, filename){
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+  </script></body>
+  </html>
