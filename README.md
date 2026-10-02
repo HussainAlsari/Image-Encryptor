@@ -1,7 +1,7 @@
 # Image-Encryptor
 Image Encryptor
 Minimalist Image Encryptor
-[https://xpxxxu.github.io/Image-Encryptor/](https://hussainalsari.github.io/Image-Encryptor/)
+https://hussainalsari.github.io/Image-Encryptor/
 A simple, client-side web application to encrypt and decrypt images using a password. Everything runs locally in your browser, no data is sent to any server.
 
 Features
